@@ -4,7 +4,7 @@
 
 /** Minimum ducats/plat ratio to search for */
 const MIN_RATIO = 10
-/** Minimum total plat value for a single potential trade (qty*price) */
+/** Minimum total ducat value for a single trade (qty*price) */
 const MIN_DUCATS_PER_TRADE = 45 * 5
 
 
@@ -12,26 +12,30 @@ const MIN_DUCATS_PER_TRADE = 45 * 5
  * @typedef API_Item
  * @property {string} id
  * @property {string} slug
+ * @property {string} i18n.en.name
  * @property {string[]} tags
  * @property {string} ducats
  */
 /**
- * @typedef Item
- * @extends API_Item
- * @property {string} name
- * @property {number} price
+ * @typedef User
+ * @property {string} id
+ * @property {string} ingameName
+ * @property {"pc"|string} platform
+ * @property {"ingame"|"online"|"offline"} status
+ * @property {boolean} crossplay
+ * @property {string} lastSeen Date
  */
 /**
- * @typedef API_TopListing
+ * @typedef API_Offer
  * @property {string} id
+ * @property {"sell"|"buy"}
  * @property {number} platinum
  * @property {number} quantity
- * @property {string} user.ingameName
+ * @property {User} user
  */
 
 
 
-import moment from 'moment';
 import clipboard from 'clipboardy';
 
 function sleep(ms) {
@@ -46,9 +50,8 @@ function sleep(ms) {
 const items_url = 'https://api.warframe.market/v2/items'
 const items_response = await fetch(items_url)
 /** @type {API_Item[]} */
-const items = (await items_response.json()).data.filter(e => {
-    return e.ducats && e.ducats >= 45 && e.tags.includes("prime")
-})
+let items = (await items_response.json()).data
+items = items.filter(e => e.ducats && e.ducats >= 45 && e.tags.includes("prime"))
 
 
 
@@ -56,45 +59,50 @@ const items = (await items_response.json()).data.filter(e => {
 // Get the best available listings for each item, discarding low quantity & bad ducats/plat ratio
 //
 const good_offers = []
+good_offers.push(["name", "qty", "plats", "ducats", "ratio", "total_plats", "total_ducats", "player", "market", "message"])
 let item_counter = 0
 
 for (const item of items) {
     item_counter += 1
-    console.log(`[${item_counter}/${items.length}] Checking top prices for ${item.slug} ...`)
-    const url = `https://api.warframe.market/v2/orders/item/${item.slug}/top`
+    console.log(`[${item_counter}/${items.length}] Checking offers for ${item.slug} ...`)
+    const url = `https://api.warframe.market/v2/orders/item/${item.slug}`
     const response = await fetch(url)
-    /** @type {{sell: API_TopListing[]}} */
-    const data = (await response.json()).data
-    if (!data.sell) continue;
+    /** @type {{sell: API_Offer[]}} */
+    let offers = (await response.json()).data
+    offers = offers.filter(e => e.user.status === "ingame")
+        .filter(e => e.type === "sell")
+        .filter(e => e.user.platform === "pc" || e.user.crossplay)
 
-    for (const offer of data.sell) {
+    for (const offer of offers) {
         const ratio = item.ducats / offer.platinum
         const total_value_ducats = item.ducats * offer.quantity
-        const total_value_plats = item.platinum * offer.quantity
+        const total_value_plats = offer.platinum * offer.quantity
 
         if (ratio >= MIN_RATIO && total_value_ducats >= MIN_DUCATS_PER_TRADE) {
             console.log(`    Found good offer : ${total_value_ducats} ducats for ${offer.quantity * offer.platinum} plats (${ratio.toFixed(2)})`)
-
             const str = [
+                item.i18n.en.name,
                 offer.quantity,
                 offer.platinum,
                 item.ducats,
-                offer.user.ingameName,
-                ratio,
-                total_value_ducats,
+                ratio.toFixed(2).replace(".", ","),
                 total_value_plats,
-            ].join("\t")
+                total_value_ducats,
+                `'${offer.user.ingameName}`,
+                `https://warframe.market/items/${item.slug}`,
+                `'@${offer.user.ingameName} Hi, would like to buy ${item.i18n.en.name}`
+            ]
             good_offers.push(str)
         }
     }
 
-    await sleep(200); // Cloudflare is not a fan of 150+ requests in a row
+    await sleep(150); // Cloudflare is not a fan of 150+ requests in a row
 }
 
 console.log("\n-----------------------------------------")
-console.log(good_offers)
+console.table(good_offers)
 console.log("\n-----------------------------------------")
 
-await clipboard.write(lines.join("\n"));
+await clipboard.write(good_offers.map(e => e.join("\t")).join("\n"));
 console.log("Data saved to clipboard");
 
